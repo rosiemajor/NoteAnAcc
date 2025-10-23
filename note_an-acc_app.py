@@ -1,12 +1,38 @@
-# behaviour_inventory_app.py
-# Streamlit app to capture shift details and generate a single-paragraph progress note
+# note_an_acc_app.py
+# Streamlit app: Behaviour Inventory – Care Shift Note Builder (v2)
+# UK English, Australian Standards
+
 import streamlit as st
 from datetime import datetime, time, timedelta
-from typing import List
+from typing import Dict, List, Tuple
 
-st.set_page_config(page_title="DSU AN-ACC Documentation Builder", layout="wide")
+st.set_page_config(page_title="Behaviour Inventory – Shift Note Builder", layout="wide")
 
-# ---------- Constants ----------
+# =========================
+# Utility helpers
+# =========================
+def slots_30m(start: time, end: time) -> List[str]:
+    out = []
+    dt = datetime.combine(datetime.today(), start)
+    end_dt = datetime.combine(datetime.today(), end)
+    while dt <= end_dt:
+        out.append(dt.strftime("%H:%M"))
+        dt += timedelta(minutes=30)
+    return out
+
+def oxford_join(items: List[str]) -> str:
+    items = [i for i in items if i and str(i).strip()]
+    if not items: return ""
+    if len(items) == 1: return items[0]
+    return ", ".join(items[:-1]) + f" and {items[-1]}"
+
+def keyify(s: str) -> str:
+    return s.lower().replace(" ", "_").replace("/", "_").replace("-", "_").replace("&", "and")
+
+# =========================
+# Constants 
+# =========================
+
 SHIFT_SCHEDULE = {
     "Morning": [
         "0600–0730 ADLs upon rising",
@@ -29,6 +55,9 @@ SHIFT_SCHEDULE = {
     ],
 }
 
+MORNING_SLOTS = slots_30m(time(6, 0), time(14, 0))
+AFTERNOON_SLOTS = slots_30m(time(14, 0), time(21, 0))
+
 ADL_OPTIONS = [
     "Toileting",
     "Change of incontinence aid",
@@ -45,22 +74,28 @@ ADL_OPTIONS = [
     "Grooming hair",
     "Groomed nails",
 ]
+
+DEFAULT_ADLS = {
+    "Morning": {
+        "Toileting", "Oral Care", "Donning Glasses", "Donning Hearing Aids",
+        "Dressing Upper and Lower Garments", "Skin Care", "Grooming hair"
+    },
+    "Afternoon": {
+        "Toileting", "Change of incontinence aid", "Shower",
+        "Skin Care", "Grooming hair"
+    },
+}
+
 VISITOR_TYPES = [
-    "Family",
-    "Friends",
-    "Internal Companion",
-    "NDIS Companion",
-    "External carer",
-    "Hair-Dresser",
-    "Beautician",
+    "Family", "Friends", "Regis Companion", "NDIS Companion",
+    "External carer", "Hair-Dresser", "Beautician"
 ]
+
 FOOD_FLUID_LEVELS = ["None", "1/8", "¼", "1/3", "½", "¾", "All"]
+MEAL_ASSIST = ["Set-up", "Cut-up", "Minimal", "Moderate", "Full"]
 ENGAGEMENT_LEVELS = [
-    "Actively participated",
-    "Observed only",
-    "Engaged minimally",
-    "Passively engaged",
-    "Refused",
+    "Actively participated", "Observed only", "Engaged minimally",
+    "Passively engaged", "Refused"
 ]
 RECEPTIVENESS = ["Not receptive", "Receptive to assistance"]
 ASSIST_LEVEL = ["1x", "2x", "3x"]
@@ -68,91 +103,376 @@ ADL_TIME = ["Minimal", "Moderate", "Extensive"]
 SETTLEDNESS = ["Settled", "Unsettled"]
 EFFECT_SCALE = ["Good", "Limited", "No effect"]
 MED_EFFECT = ["Effective", "Partial", "No effect"]
-SEVERITY = ["Minimal", "Moderate", "Severe"]
-BEHAVIOUR_FLAGS = [
-    # All possible exhibited characteristics of AN-ACC BRUA Measure. You can extend this list as required.
-    "Refusal of care",
-    "Repetitive calling out",
-    "Demanding behaviour",
-    "Swearing",
-    "Shouting",
-    "Excessive vocalisation",
-    "Frequent questioning",
-    "Seeking constant reassurance",
-    "Restlessness",
-    "Pacing",
-    "Reduced engagement and participation",
-    "Lack of motivation",
-    "Flat affect",
-    "Sleep or appetite changes",
-    "Tearfulness",
-    "Social withdrawal",
-    "Preoccupied mind",
-    "Verbal threats",
-    "Easily angered",
-    "Snapping at others",
-    "Impatience",
-    "Walking without required aids",
-    "Entering others’ rooms",
-    "Touching others’ belongings",
-    "Interfering with others",
-    "Movement into unsafe areas",
-    "Exit-seeking behaviour",
-    "Climbing out of a chair or bed",
-    "Attempting to control care through guilt or emotional pressure",
-    "Feigning illness",
-    "Exaggerating symptoms",
-    "Verbalises irrational fear",
-    "Hypervigilance",
-    "Simulated falls",
-    "Repetitive motions such as: Pacing, Organising, Rearranging, Cleaning, Rocking, Tapping, Itching, Picking",
-    "Public indecency (e.g., urinating or defecating in public spaces)",
-    "Hitting",
-    "Pushing",
-    "Kicking",
-    "Spitting",
-    "Biting",
-    "Throwing furniture",
-    "Damaging property",
-    "Sexually or physically inappropriate touching",
-    "Public displays of a sexual or physical nature",
-    "Racial or sexual slurs",
-    "Unsafe smoking or drinking habits",
-    "Self-harm",
-    "Suicidal Ideation",
-    "Constant movement"
-    
-]
 
-def half_hour_slots(start: time, end: time) -> List[str]:
-    slots = []
-    dt = datetime.combine(datetime.today(), start)
-    end_dt = datetime.combine(datetime.today(), end)
-    while dt <= end_dt:
-        slots.append(dt.strftime("%H:%M"))
-        dt += timedelta(minutes=30)
-    return slots
+# ---- Behaviour structure: Domains → Subdomains → Behaviours
+DOMAINS: Dict[str, Dict[str, List[str]]] = {
+    "Agitation": {
+        "Physical": [
+            "Physically aggressive", "Disinhibition", "Care resistance"
+        ],
+        "Verbal": [
+            "Abusive language", "Verbally disruptive"
+        ],
+        "Emotional Dependence": [
+            "Passive resistance", "Attention seeking", "Manipulative",
+            "Withdrawal & apathy", "Depression", "Anxiety", "Irritable"
+        ],
+    },
+    "Wandering": {
+        "Locomotion": [
+            "Problem wandering", "Intrusive behaviour"
+        ]
+    },
+    "Other": {
+        "Risk/Pattern/Perception": [
+            "High-risk behaviour", "Aberrant motor behaviour",
+            "Sleep & night-time behaviour", "Appetite & eating changes",
+            "Hallucinations", "Delusions"
+        ]
+    }
+}
 
-MORNING_SLOTS = half_hour_slots(time(6, 0), time(14, 0))
-AFTERNOON_SLOTS = half_hour_slots(time(14, 0), time(21, 0))
+# ---- Behaviour Inventory detail lists (examples condensed for UI clarity; extend as needed)
+INVENTORY_DETAILS: Dict[str, List[str]] = {
+    # Agitation / Physical
+    "Physically aggressive": [
+        "Upset when approached", "Attempted to hurt others",
+        "Violence toward staff", "Violence toward co-resident",
+        "Damaged property", "Uncooperative with help",
+        "Physically resisted care", "Demanded own way"
+    ],
+    "Disinhibition": [
+        "Inappropriate touching", "Public displays", "Public indecency",
+        "Insensitive remarks", "Overly personal disclosures"
+    ],
+    "Care resistance": [
+        "Refusal of care", "Non-compliance with hygiene",
+        "Non-compliance with medication", "Non-compliance with activity"
+    ],
 
-# ---------- UI ----------
-st.title("Behaviour Inventory – Shift Note Builder")
+    # Agitation / Verbal
+    "Abusive language": [
+        "Swearing", "Shouting", "Racial or sexual slurs", "Verbal threats"
+    ],
+    "Verbally disruptive": [
+        "Repetitive calling out", "Excessive vocalisation", "Demanding behaviour"
+    ],
+
+    # Agitation / Emotional Dependence
+    "Passive resistance": [
+        "Hesitant with care", "Reluctant to participate"
+    ],
+    "Attention seeking": [
+        "Seeking constant reassurance", "Feigning illness",
+        "Exaggerating symptoms"
+    ],
+    "Manipulative": [
+        "Emotional pressure", "Guilt-inducing statements"
+    ],
+    "Withdrawal & apathy": [
+        "Reduced engagement", "Flat affect", "Lack of motivation",
+        "Less spontaneous", "Less enthusiastic"
+    ],
+    "Depression": [
+        "Tearfulness", "Sleep cycle affected", "Socially withdrawn",
+        "Slow but coherent speech", "Negative self-image",
+        "Feelings of guilt", "Expressions of wanting to die"
+    ],
+    "Anxiety": [
+        "Catastrophising statements", "Preoccupied thought content",
+        "Restlessness", "Pacing", "Hypervigilance",
+        "Irrational fears", "Frequent questioning",
+        "Excessive worry about future", "Tension / unable to relax",
+        "Gasping/sighing due to nerves", "Racing heart (not medically explained)",
+        "Avoidance of places/situations", "Upset when separated from trusted others"
+    ],
+    "Irritable": [
+        "Easily irritated", "Impatient with delays", "Argued",
+        "Difficult to get along with", "Snapped at others"
+    ],
+
+    # Wandering
+    "Intrusive behaviour": [
+        "Interfering with others", "Entering others’ rooms",
+        "Touching others’ belongings"
+    ],
+    "Problem wandering": [
+        "Constant movement", "Exit-seeking", "Movement into unsafe areas"
+    ],
+
+    # Other
+    "High-risk behaviour": [
+        "Walking without required aids", "Climbed from chair/bed",
+        "Simulated falls", "Unsafe actions", "Exit-seeking"
+    ],
+    "Aberrant motor behaviour": [
+        "Repetitive pacing/organising/rearranging/cleaning",
+        "Rocking/tapping", "Itching/picking", "Excessive fidgeting"
+    ],
+    "Hallucinations": [
+        "Responding to voices", "Talking to unseen people",
+        "Acting as if seeing figures", "Smelling things others cannot",
+        "Tactile sensations not present", "Tasting things not present"
+    ],
+    "Delusions": [
+        "False skin sensations", "Interacted with voices",
+        "Saw figures not present", "False smells/tastes"
+    ],
+    "Sleep & night-time behaviour": [
+        "Night wandering", "Difficulty sleeping",
+        "Packing/planning to leave at night"
+    ],
+    "Appetite & eating changes": [
+        "Pooling food in mouth", "Poor appetite", "Unusually good appetite",
+        "Change in preferred foods", "Playing with/destroying meal"
+    ],
+}
+
+# ---- Triggers (modifiable / non-modifiable) and Management (prevention / intervention)
+TRIGGERS_MOD: Dict[str, List[str]] = {
+    "Physically aggressive": [
+        "Environmental overstimulation", "Unmet needs (pain/hunger/toilet)",
+        "Personal space issues on approach", "Poor communication", "Frustration/confusion"
+    ],
+    "Disinhibition": [
+        "Environmental factors", "Lack of privacy", "Boredom",
+        "Misread social cues", "Medication side effects"
+    ],
+    "Abusive language": [
+        "Frustration", "Communication barriers", "Pain",
+        "Sensory overload", "Environmental stressors"
+    ],
+    "Verbally disruptive": [
+        "Anxiety", "Loneliness", "Boredom", "Environmental/routine changes"
+    ],
+    "Passive resistance": [
+        "Lack of trust", "Poor communication", "Staff inconsistency",
+        "Fear of losing autonomy"
+    ],
+    "Attention seeking": ["Unmet emotional needs", "Loneliness", "Boredom"],
+    "Manipulative": ["Staff inconsistency", "Lack of boundaries", "Unmet emotional needs"],
+    "Withdrawal & apathy": [
+        "Pain", "Under-stimulation", "Poor lighting/noise", "Co-occurring depression"
+    ],
+    "Depression": [
+        "Change in routine/environment", "Social isolation", "Grief", "Comfort needs"
+    ],
+    "Anxiety": [
+        "Uncertainty", "Change in routine/environment", "Lack of reassurance",
+        "Physical discomfort", "Hearing/vision impairment", "Recent event"
+    ],
+    "Irritable": [
+        "Pain", "Discomfort", "Fatigue", "Hunger", "Toileting needs",
+        "Overstimulation"
+    ],
+    "Intrusive behaviour": [
+        "Confusing layout", "Boredom",
+        "Insufficient supervision/meaningful activity"
+    ],
+    "Problem wandering": [
+        "Restlessness", "Unmet physical needs",
+        "Searching for comfort (familiar person/place)", "Change in routine/environment"
+    ],
+    "High-risk behaviour": [
+        "Frustration/confusion", "Unmet needs", "Environmental obstacles"
+    ],
+    "Aberrant motor behaviour": [
+        "Boredom", "Anxiety", "Medication side effects"
+    ],
+}
+
+TRIGGERS_NONMOD: Dict[str, List[str]] = {
+    "Physically aggressive": ["Cognitive impairment", "Dementia progression", "Neurological condition", "Personality"],
+    "Disinhibition": ["Frontal lobe changes", "Frontotemporal dementia", "Historical hypersexuality"],
+    "Abusive language": ["Cognitive decline", "Personality", "Cultural background", "Psychiatric illness"],
+    "Verbally disruptive": ["Cognitive decline", "Hearing impairment", "Psychiatric disorders"],
+    "Passive resistance": ["Cognitive impairment", "Trauma history", "Personality style"],
+    "Attention seeking": ["Personality traits", "Lifelong coping mechanisms"],
+    "Manipulative": ["Personality disorder traits", "Past relational patterns"],
+    "Withdrawal & apathy": ["Cognitive impairment", "Chronic illness", "Existing psychiatric illness"],
+    "Depression": ["Genetic predisposition", "Chronic illness", "Cognitive decline"],
+    "Anxiety": ["Personality", "Dementia subtype", "Cognitive decline"],
+    "Irritable": ["Cognitive decline", "Severe memory loss", "Personality traits", "Chronic conditions"],
+    "Intrusive behaviour": ["Cognitive impairment", "Disorientation", "Frontal lobe changes", "Personality"],
+    "Problem wandering": ["Cognitive impairment", "Sundowning", "Neurological damage"],
+    "High-risk behaviour": ["Cognitive impairment", "Physical disability", "Psychiatric illness"],
+    "Aberrant motor behaviour": ["Cognitive/neurological/psychiatric illness"],
+}
+
+MANAGEMENT_PREVENT: Dict[str, List[str]] = {
+    "Physically aggressive": [
+        "Maintain calm environment", "Consistent routine",
+        "Person-centred care and validation techniques"
+    ],
+    "Disinhibition": [
+        "Maintain dignity and privacy", "Clear communication", "Structured routine",
+        "Gender-appropriate staff", "Orient to place and person"
+    ],
+    "Abusive language": [
+        "Therapeutic communication", "Validate emotions", "Calm reassurance",
+        "Maintain calm environment"
+    ],
+    "Verbally disruptive": [
+        "Meaningful engagement", "Maintain routine",
+        "Comfort items", "1:1 or group companionship"
+    ],
+    "Passive resistance": [
+        "Empowerment and choice", "Explain each action", "Build rapport"
+    ],
+    "Attention seeking": [
+        "Positive interactions", "Scheduled re-approaches",
+        "Encourage group participation", "Encourage independence"
+    ],
+    "Manipulative": [
+        "Set firm but kind limits", "Consistent team approach", "Focus on quality care"
+    ],
+    "Withdrawal & apathy": [
+        "Encourage social interaction", "Structured activities",
+        "Promote autonomy", "Check unmet ADL needs"
+    ],
+    "Depression": [
+        "Foster social connection", "Positive communication",
+        "Daylight exposure", "Familiar environment"
+    ],
+    "Anxiety": [
+        "Consistent routine/environment", "Calm tone", "Avoid rushing"
+    ],
+    "Irritable": [
+        "Monitor comfort needs", "Ensure rest periods", "Calm surroundings"
+    ],
+    "Intrusive behaviour": [
+        "Structured activity", "Secure environment",
+        "Signage/barriers", "Reality orientation"
+    ],
+    "Problem wandering": [
+        "Secure exits", "Notify nearby staff",
+        "Offer hydration/food/toileting", "Routine and exercise"
+    ],
+    "High-risk behaviour": [
+        "Maintain safe environment", "Provide supervision",
+        "Ensure aids within reach", "Educate"
+    ],
+    "Aberrant motor behaviour": [
+        "Sensory stimulation", "Maintain structure", "Allow safe expression"
+    ],
+    "Sleep & night-time behaviour": [
+        "Dim lights", "Comfort drink/snack", "Ensure toileting",
+        "Comfortable temperature", "Calming music", "Orienting activities"
+    ],
+}
+
+MANAGEMENT_INTERVENT: Dict[str, List[str]] = {
+    "Physically aggressive": [
+        "De-escalation strategies", "Ensure safety",
+        "Redirect behaviour", "Diversional activity", "RN review"
+    ],
+    "Disinhibition": [
+        "Calm redirection", "Clear boundaries", "Neutral body language",
+        "Document behaviour", "Inform RN"
+    ],
+    "Abusive language": [
+        "Avoid confrontation", "Redirect conversation",
+        "Acknowledge feelings", "Short clear sentences",
+        "Relaxed posture", "RN review"
+    ],
+    "Verbally disruptive": [
+        "Acknowledge feelings", "Redirect", "Reality orientation (visual cues)",
+        "Involve family", "Inform RN"
+    ],
+    "Passive resistance": [
+        "Gentle encouragement", "Offer choices", "Familiar carer", "RN review"
+    ],
+    "Attention seeking": [
+        "Redirect to activities", "Reinforce independence",
+        "Duty of care for all residents", "RN review"
+    ],
+    "Manipulative": [
+        "Avoid power struggles", "Team debriefing",
+        "Refocus to goals/routine", "RN review"
+    ],
+    "Withdrawal & apathy": [
+        "Positive reinforcement", "Small achievable tasks", "RN review"
+    ],
+    "Depression": [
+        "Emotional support", "Involve Psychologist/GP",
+        "Monitor suicidality", "Review meds and adherence", "RN review"
+    ],
+    "Anxiety": [
+        "Provide reassurance", "Relaxation strategies",
+        "RNOD call if needed", "Consider GP review", "Inform RN"
+    ],
+    "Irritable": [
+        "Validate feelings", "Short simple statements",
+        "Redirect to calming activity", "Move to calm area",
+        "Ensure comfort needs met", "RN review"
+    ],
+    "Intrusive behaviour": [
+        "Gentle redirection", "Meaningful activity",
+        "Reassure and validate", "Separate triggering co-residents", "Inform RN"
+    ],
+    "Problem wandering": [
+        "Regular support/supervision", "Purposeful task", "RN involved"
+    ],
+    "High-risk behaviour": [
+        "Prompt response to unsafe acts", "Falls prevention plan",
+        "MDT involvement", "Redirect to calming activity",
+        "Ensure safety", "Monitor distress severity", "RN review"
+    ],
+    "Aberrant motor behaviour": [
+        "Redirect to calming activities", "Ensure safety",
+        "Minimise distress/harm", "RN review"
+    ],
+    "Sleep & night-time behaviour": [
+        "Redirect to bed", "Dim lights", "Warm drink/snack",
+        "Ensure toileting", "Comfortable temperature",
+        "Calming music", "RN review"
+    ],
+}
+
+# =========================
+# User Interface – Header & Sidebar
+# =========================
+st.title("Behaviour Inventory – Shift Note Builder (v2)")
 
 with st.sidebar:
     st.subheader("Shift Settings")
     shift_type = st.selectbox("Shift Type", ["Morning", "Afternoon"])
-    st.caption("Tip: The schedule below is a guide only – use clinical judgement.")
+    st.caption("The schedule below is a guide only — use clinical judgement.")
 
     st.write("**Shift Structure (guide)**")
     for line in SHIFT_SCHEDULE[shift_type]:
         st.write(f"• {line}")
 
-col1, col2 = st.columns(2)
+# =========================
+# Section: ADLs & Care
+# =========================
+c1, c2 = st.columns(2)
 
-with col1:
+with c1:
     st.header("ADLs & Care")
-    adls_done = st.multiselect("ADLs – select all that apply", ADL_OPTIONS)
+
+    # Select/Clear controls
+    b1, b2 = st.columns(2)
+    with b1:
+        if st.button("Select all ADLs"):
+            for opt in ADL_OPTIONS:
+                st.session_state[f"adl_{keyify(opt)}"] = True
+    with b2:
+        if st.button("Clear all ADLs"):
+            for opt in ADL_OPTIONS:
+                st.session_state[f"adl_{keyify(opt)}"] = False
+
+    st.caption("Pre-ticked based on shift; untick anything not completed.")
+
+    # Render checkboxes with shift-aware defaults
+    preselected = DEFAULT_ADLS.get(shift_type, set())
+    adls_done = []
+    for opt in ADL_OPTIONS:
+        k = f"adl_{keyify(opt)}"
+        chk = st.checkbox(opt, value=st.session_state.get(k, opt in preselected), key=k)
+        if chk:
+            adls_done.append(opt)
+
     behaviour_management_done = st.checkbox("Behaviour management undertaken this shift")
 
     st.markdown("**Care Requirements**")
@@ -162,13 +482,11 @@ with col1:
 
     st.markdown("**Dietary Intake (scheduled meal times)**")
     intake = st.selectbox("Total food & fluid intake", FOOD_FLUID_LEVELS, index=5)
-    meal_assist = st.multiselect(
-        "Meal assistance (select all that apply)",
-        ["Set-up", "Cut-up", "Minimal", "Moderate", "Full"],
-    )
+    meal_assist_sel = st.multiselect("Meal assistance (select all that apply)", MEAL_ASSIST)
 
-with col2:
+with c2:
     st.header("Activity & Visitors")
+
     engagement_level = st.selectbox("Activity engagement level", ENGAGEMENT_LEVELS, index=0)
     engagement_behaviour_desc = st.text_area(
         "If behaviours occurred during engagement, describe presentation/benefit (optional)",
@@ -176,100 +494,102 @@ with col2:
     )
 
     st.markdown("**Visitors**")
-    had_visitors = st.radio("Was the resident visited this shift?", ["No", "Yes"], index=0)
+    had_visitors = st.radio("Was the resident visited this shift?", ["No", "Yes"], index=0, horizontal=True)
     visitor_types = []
     visitor_times = []
     if had_visitors == "Yes":
         visitor_types = st.multiselect("Visitor type(s)", VISITOR_TYPES)
         slot_source = MORNING_SLOTS if shift_type == "Morning" else AFTERNOON_SLOTS
-        visitor_times = st.multiselect(
-            "Visit times (30-min intervals)",
-            options=slot_source
-        )
+        visitor_times = st.multiselect("Visit times (30-min intervals)", options=slot_source)
 
+# =========================
+# Behaviour Section
+# =========================
 st.markdown("---")
-st.header("Behaviour Episodes (optional)")
-st.caption("Add any behaviour episodes observed this shift (you can add none, one, or several).")
+st.header("Behaviour Inventory")
+st.caption("Record behaviour episodes by **Domain → Subdomain → Behaviour(s)** with frequency, severity, and disruption. Inclusion rules are applied automatically.")
 
-episodes = []
-with st.expander("Add/Review episodes", expanded=False):
-    ep_count = st.number_input("Number of episodes to record", min_value=0, max_value=10, value=0, step=1)
-    for i in range(ep_count):
-        st.subheader(f"Episode {i+1}")
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            behaviour = st.selectbox(f"Behaviour #{i+1}", BEHAVIOUR_FLAGS, key=f"beh_{i}")
-        with c2:
-            timing_vs_trigger = st.selectbox(
-                f"Timing vs potential trigger #{i+1}",
-                ["Before", "During", "After"],
-                key=f"timevs_{i}"
-            )
-        with c3:
-            severity = st.selectbox(f"Severity #{i+1}", SEVERITY, key=f"sev_{i}")
+domain = st.selectbox("Domain", list(DOMAINS.keys()))
+subdomain = st.selectbox("Subdomain", list(DOMAINS[domain].keys()))
+behaviour_pick = st.multiselect("Behaviours (tick all that apply)", DOMAINS[domain][subdomain])
 
-        trigger_text = st.text_input(
-            f"Potential trigger  #{i+1}",
-            key=f"trig_{i}",
-            placeholder="e.g., overstimulating environment, toileting needs, showering, mealtime, interaction with co-resident"
-        )
+episodes: List[dict] = []
 
-        disr_col1, disr_col2 = st.columns(2)
-        with disr_col1:
-            caused_disruption = st.checkbox(f"Occupational disruption caused? #{i+1}", key=f"disr_{i}")
-        dur = None
-        staff_num = None
-        with disr_col2:
-            if caused_disruption:
-                dur = st.number_input(f"Disruption duration (mins) #{i+1}", min_value=1, max_value=240, value=5, key=f"dur_{i}")
-                staff_num = st.number_input(f"Number of staff impacted #{i+1}", min_value=1, max_value=10, value=1, key=f"staff_{i}")
+if behaviour_pick:
+    st.markdown("#### Episodes (set scoring for each selected behaviour)")
+    for i, beh in enumerate(behaviour_pick):
+        with st.container(border=True):
+            st.markdown(f"**{i+1}. {beh}**")
 
-        interventions = st.multiselect(
-            f"Interventions provided #{i+1}",
-            [
-                "Verbal de-escalation",
-                "Redirection",
-                "1:1 engagement",
-                "Environmental modification (quiet area)",
-                "Diversional activity",
-                "Offer food/fluids",
-                "Toileting & hygiene needs",
-                "Provide comfort/reassurance",
-                "RN informed for review",
-            ],
-            key=f"int_{i}"
-        )
+            # Specific manifestations (from inventory details)
+            specifics = INVENTORY_DETAILS.get(beh, [])
+            selected_specifics = []
+            if specifics:
+                selected_specifics = st.multiselect(
+                    f"Specific manifestations of {beh} (optional)",
+                    specifics, key=f"spec_{i}"
+                )
 
-        eff = st.selectbox(f"Effectiveness of strategies #{i+1}", EFFECT_SCALE, index=0, key=f"eff_{i}")
+            cA, cB, cC, cD = st.columns([1,1,1,1])
+            with cA:
+                freq = st.slider("Frequency (1–4)", 1, 4, 1, key=f"freq_{i}",
+                                 help="1: once; 2: at times; 3: often; 4: very often")
+            with cB:
+                sev = st.slider("Severity (1–4)", 1, 4, 1, key=f"sev_{i}",
+                                help="1: minimal; 2: mild; 3: moderate; 4: severe")
+            with cC:
+                disrupt = st.slider("Occupational disruption (0–4)", 0, 4, 0, key=f"disr_{i}",
+                                    help="0: nil; 1: minimal; 2: mild; 3: moderate; 4: severe")
+            with cD:
+                when_slot = st.selectbox(
+                    "Approx. time",
+                    MORNING_SLOTS if shift_type == "Morning" else AFTERNOON_SLOTS,
+                    key=f"slot_{i}"
+                )
 
-        med_given = st.checkbox(f"Sedative medication administered? #{i+1}", key=f"med_{i}")
-        med_effect = None
-        if med_given:
-            med_effect = st.selectbox(f"Medication effect #{i+1}", MED_EFFECT, index=0, key=f"medeff_{i}")
+            # Triggers (modifiable / non-modifiable) + free text
+            trig_mod_opts = TRIGGERS_MOD.get(beh, [])
+            trig_nonmod_opts = TRIGGERS_NONMOD.get(beh, [])
+            t1, t2 = st.columns(2)
+            with t1:
+                trig_mod = st.multiselect("Modifiable triggers (select as applicable)", trig_mod_opts, key=f"tmod_{i}")
+            with t2:
+                trig_nonmod = st.multiselect("Non-modifiable triggers", trig_nonmod_opts, key=f"tnon_{i}")
+            trig_free = st.text_input("Additional trigger context (optional)", key=f"tfree_{i}")
 
-        when_slot = st.selectbox(
-            f"Approximate time of episode #{i+1}",
-            MORNING_SLOTS if shift_type == "Morning" else AFTERNOON_SLOTS,
-            key=f"slot_{i}"
-        )
+            # Management (prevention used this shift? / interventions applied?)
+            prev_opts = MANAGEMENT_PREVENT.get(beh, [])
+            int_opts = MANAGEMENT_INTERVENT.get(beh, [])
+            m1, m2 = st.columns(2)
+            with m1:
+                used_prevent = st.multiselect("Preventative strategies utilised", prev_opts, key=f"prev_{i}")
+            with m2:
+                interventions = st.multiselect("Interventions applied", int_opts, key=f"int_{i}")
 
-        episodes.append({
-            "behaviour": behaviour,
-            "timing": timing_vs_trigger,
-            "trigger": trigger_text.strip(),
-            "severity": severity,
-            "disruption": caused_disruption,
-            "duration": dur,
-            "staff": staff_num,
-            "interventions": interventions,
-            "effectiveness": eff,
-            "med_given": med_given,
-            "med_effect": med_effect,
-            "time": when_slot
-        })
-    if ep_count == 0:
-        st.info("No episodes recorded.")
+            eff = st.selectbox("Effectiveness of strategies", EFFECT_SCALE, index=0, key=f"eff_{i}")
+            med_given = st.checkbox("Sedative medication administered?", key=f"med_{i}")
+            med_eff = st.selectbox("Medication effect", MED_EFFECT, index=0, key=f"me_{i}") if med_given else None
 
+            episodes.append({
+                "behaviour": beh,
+                "specifics": selected_specifics,
+                "freq": freq,
+                "sev": sev,
+                "disrupt": disrupt,
+                "time": when_slot,
+                "trig_mod": trig_mod,
+                "trig_nonmod": trig_nonmod,
+                "trig_free": trig_free.strip(),
+                "prevent": used_prevent,
+                "interventions": interventions,
+                "eff": eff,
+                "med_given": med_given,
+                "med_eff": med_eff
+            })
+
+# =========================
+# End of Shift
+# =========================
 st.markdown("---")
 st.header("End of Shift")
 settledness = st.selectbox("Resident appears", SETTLEDNESS, index=0)
@@ -277,26 +597,32 @@ in_bed = st.checkbox("Resident in bed at time of report")
 call_bell = False
 sensor_mats = 0
 crash_mats = 0
-ongoing = st.text_input("Ongoing care/concerns (optional)", placeholder="e.g., continue hourly rounding; monitor for further agitation.")
+ongoing = st.text_input("Ongoing care/concerns (optional)",
+                        placeholder="e.g., Continue hourly rounding; monitor for further agitation.")
 if in_bed:
     call_bell = st.checkbox("Call bell left within reach", value=True)
     sensor_mats = st.number_input("Sensor mats in situ", min_value=0, max_value=2, value=1)
     crash_mats = st.number_input("Crash mats in situ", min_value=0, max_value=2, value=0)
 
-# ---------- Note Builder ----------
-def oxford_join(items: List[str]) -> str:
-    items = [i for i in items if i and str(i).strip()]
-    if not items:
-        return ""
-    if len(items) == 1:
-        return items[0]
-    return ", ".join(items[:-1]) + f" and {items[-1]}"
+# =========================
+# Inclusion Logic & Note Builder
+# =========================
+def include_episode(freq: int, sev: int, disrupt: int) -> bool:
+    """
+    Include if:
+      - freq >= 3 OR
+      - sev >= 3 OR
+      - freq * sev > 4 OR
+      - disruption >= 3
+    Otherwise do not include.
+    """
+    return (freq >= 3) or (sev >= 3) or (freq * sev > 4) or (disrupt >= 3)
 
 def build_note() -> str:
-    parts = []
+    parts: List[str] = []
 
-    # Baseline & shift
-    parts.append(f"Resident’s baseline varied minimally throughout the {shift_type.lower()} shift.")
+    # Baseline intro: will change to 'no notable change' only if no episodes included
+    included_any = False
 
     # ADLs
     if adls_done:
@@ -304,77 +630,28 @@ def build_note() -> str:
     if behaviour_management_done:
         parts.append("Behaviour management strategies were implemented as required.")
 
-    # Behaviour change (episodes loop)
-    if episodes:
-        for ep in episodes:
-            trig_txt = f" {ep['trigger']}" if ep["trigger"] else ""
+    # Behaviours
+    for ep in episodes:
+        if include_episode(ep["freq"], ep["sev"], ep["disrupt"]):
+            included_any = True
+
+            spec = f" ({oxford_join(ep['specifics'])})" if ep["specifics"] else ""
+            trig_bits = []
+            if ep["trig_mod"]: trig_bits.append(oxford_join(ep["trig_mod"]))
+            if ep["trig_nonmod"]: trig_bits.append(oxford_join(ep["trig_nonmod"]))
+            if ep["trig_free"]: trig_bits.append(ep["trig_free"])
+            trig_txt = f" and potentially triggered by {oxford_join(trig_bits)}" if trig_bits else ""
+
             disr_txt = ""
-            if ep["disruption"]:
-                d = f" for approximately {ep['duration']} minutes" if ep["duration"] else ""
-                s = f" affecting {int(ep['staff'])} staff" if ep["staff"] else ""
-                disr_txt = f" and caused occupational disruption{d}{s}"
+            if ep["disrupt"] >= 3:
+                disr_map = {3: "moderate", 4: "severe"}
+                disr_txt = f" and caused {disr_map.get(ep['disrupt'], 'notable')} occupational disruption"
+
             ints = oxford_join(ep["interventions"])
             ints_txt = f" Staff provided {ints} and made the care team aware." if ints else " Staff informed the care team."
+
             med_txt = ""
             if ep["med_given"]:
-                med_txt = f" Pharmacological intervention was administered with {ep['med_effect'].lower()} reduction in behaviours."
-            parts.append(
-                f"Resident demonstrated {ep['behaviour'].lower()} at approximately {ep['time']}, "
-                f"{ep['timing'].lower()} a potential trigger{trig_txt}. "
-                f"The behaviour involved {ep['severity'].lower()} distress{disr_txt}.{ints_txt} "
-                f"Care strategies had {ep['effectiveness'].lower()} overall effect.{med_txt}"
-            )
-    else:
-        parts.append("There was no notable change in behaviour, affect, cognition or functional ability.")
+                med_txt = f" Pharmacological intervention was administered with {ep['med_eff'].lower()} reduction in behaviours."
 
-    # Engagement
-    parts.append(f"Activity engagement: {engagement_level.lower()}.")
-    if engagement_behaviour_desc.strip():
-        parts.append(engagement_behaviour_desc.strip())
-
-    # Visitors
-    if had_visitors == "Yes" and visitor_types:
-        when_txt = f" at {oxford_join(visitor_times)}" if visitor_times else ""
-        parts.append(f"Visited by {oxford_join(visitor_types)}{when_txt}.")
-
-    # Intake & meal assistance
-    parts.append(f"Total intake during scheduled meal times was {intake.lower()}.")
-    if meal_assist:
-        parts.append(f"Meal assistance required: {oxford_join(meal_assist)}.")
-
-    # Care requirements
-    parts.append(
-        f"Resident was {receptiveness.lower()} and required {pa_assist.lower()} physical assistance "
-        f"with {adl_time.lower()} time to complete ADLs."
-    )
-
-    # End of report
-    end_bits = [f"resident appears {settledness.lower()}"]
-    if in_bed:
-        bed_bits = []
-        if call_bell:
-            bed_bits.append("call bell left within reach")
-        if sensor_mats:
-            bed_bits.append(f"{sensor_mats} sensor mat(s) in situ")
-        if crash_mats:
-            bed_bits.append(f"{crash_mats} crash mat(s) in situ")
-        if bed_bits:
-            end_bits.append(", ".join(bed_bits))
-    if ongoing.strip():
-        end_bits.append(f"ongoing care: {ongoing.strip()}")
-    parts.append("At time of report, " + "; ".join(end_bits) + ".")
-
-    # One paragraph, UK English style
-    paragraph = " ".join(parts)
-    # Clean spacing
-    paragraph = " ".join(paragraph.split())
-    return paragraph
-
-if st.button("Generate Shift Note", use_container_width=True):
-    note = build_note()
-    st.success("Shift note generated.")
-    st.text_area("Final paragraph (copy/paste)", note, height=220)
-    st.download_button("Download .txt", data=note, file_name="shift_note.txt")
-
-# legal footer
-st.caption("This tool helps standardise clinical language in a resedential memory support setting. Always exercise professional judgement and chart per relevant facility policy, juristidiction's ethical codes & legislation.")
+            # Frequency to words
