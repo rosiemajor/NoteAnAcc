@@ -99,7 +99,7 @@ ENGAGEMENT_LEVELS = [
 ]
 RECEPTIVENESS = ["Not receptive", "Receptive to assistance"]
 ASSIST_LEVEL = ["1x", "2x", "3x"]
-ADL_TIME = ["Minimal", "Moderate", "Extensive"]
+ADL_TIME = ["Appropriate", "Moderate", "Extensive"]
 SETTLEDNESS = ["Settled", "Unsettled"]
 EFFECT_SCALE = ["Good", "Limited", "No effect"]
 MED_EFFECT = ["Effective", "Partial", "No effect"]
@@ -655,3 +655,71 @@ def build_note() -> str:
                 med_txt = f" Pharmacological intervention was administered with {ep['med_eff'].lower()} reduction in behaviours."
 
             # Frequency to words
+            # Frequency to words
+            f_words = {1: "one instance", 2: "at times", 3: "often", 4: "very often"}
+            s_words = {1: "minimal", 2: "mild", 3: "moderate", 4: "severe"}
+
+            parts.append(
+                f"Resident demonstrated {f_words[ep['freq']]} of {ep['behaviour'].lower()}{spec} at approximately {ep['time']}, "
+                f"with {s_words[ep['sev']]} distress{disr_txt}{trig_txt}.{ints_txt} "
+                f"Care strategies had {ep['eff'].lower()} overall effect.{med_txt}"
+            )
+
+    # If no included episodes, minimal baseline statement; otherwise varied baseline
+    if not included_any:
+        parts.insert(0, f"Resident’s baseline varied minimally throughout the {shift_type.lower()} shift.")
+        parts.append("There was no notable change in behaviour, affect, cognition or functional ability.")
+    else:
+        parts.insert(0, f"Resident’s baseline varied throughout the {shift_type.lower()} shift.")
+
+    # Engagement
+    parts.append(f"Activity engagement: {engagement_level.lower()}.")
+    if engagement_behaviour_desc.strip():
+        parts.append(engagement_behaviour_desc.strip())
+
+    # Visitors
+    if had_visitors == "Yes" and visitor_types:
+        when_txt = f" at {oxford_join(visitor_times)}" if visitor_times else ""
+        parts.append(f"Visited by {oxford_join(visitor_types)}{when_txt}.")
+
+    # Intake & meal assistance
+    parts.append(f"Total intake during scheduled meal times was {intake.lower()}.")
+    if meal_assist_sel:
+        parts.append(f"Meal assistance required: {oxford_join(meal_assist_sel)}.")
+
+    # Care requirements
+    parts.append(
+        f"Resident was {receptiveness.lower()} and required {pa_assist.lower()} physical assistance "
+        f"with {adl_time.lower()} time to complete ADLs."
+    )
+
+    # End of report
+    end_bits = [f"resident appears {settledness.lower()}"]
+    if in_bed:
+        bed_bits = []
+        if call_bell:
+            bed_bits.append("call bell left within reach")
+        if sensor_mats:
+            bed_bits.append(f"{sensor_mats} sensor mat(s) in situ")
+        if crash_mats:
+            bed_bits.append(f"{crash_mats} crash mat(s) in situ")
+        if bed_bits:
+            end_bits.append(", ".join(bed_bits))
+    if ongoing.strip():
+        end_bits.append(f"ongoing care: {ongoing.strip()}")
+    parts.append("At time of report, " + "; ".join(end_bits) + ".")
+
+    # One paragraph
+    paragraph = " ".join(" ".join(parts).split())
+    return paragraph
+
+# =========================
+# Generate & Download
+# =========================
+if st.button("Generate Shift Note", use_container_width=True):
+    note = build_note()
+    st.success("Shift note generated.")
+    st.text_area("Final paragraph (copy/paste)", note, height=260)
+    st.download_button("Download .txt", data=note, file_name="shift_note.txt")
+
+st.caption("This tool helps standardise clinical language. Always exercise professional judgement and chart per facility policy.")
